@@ -1,0 +1,11 @@
+streamlit
+langchain
+langchain-community
+langchain-openai
+langchain-huggingface
+langchain-core
+langchain-text-splitters
+chromadb
+pypdf
+sentence-transformers
+pandas

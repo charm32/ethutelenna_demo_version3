@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Streamlit secrets (NEVER commit your real API key)
+.streamlit/secrets.toml
+
+# Vector database (rebuilt automatically from PDFs)
+chroma_db/
+
+# User data files (generated at runtime)
+users.json
+tracking.json
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logo data (large base64 file - optional to commit)
+# logo_data.py
