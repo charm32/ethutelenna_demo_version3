@@ -3,8 +3,53 @@ import logging
 import os
 import json
 import hashlib
+import io
+import textwrap
 from datetime import datetime
 from pathlib import Path
+
+# ── Voice & Language (isiZulu / Sesotho / English) ──────────────────────────
+try:
+    from gtts import gTTS
+    GTTS_AVAILABLE = True
+except ImportError:
+    GTTS_AVAILABLE = False
+
+try:
+    from googletrans import Translator
+    TRANSLATE_AVAILABLE = True
+except ImportError:
+    TRANSLATE_AVAILABLE = False
+
+LANGUAGES = {
+    "English":  {"gtts_lang": "en", "trans_dest": "en", "flag": "🇿🇦"},
+    "isiZulu":  {"gtts_lang": "zu", "trans_dest": "zu", "flag": "🌍"},
+    "Sesotho":  {"gtts_lang": "st", "trans_dest": "st", "flag": "🌍"},
+}
+
+@st.cache_data(show_spinner=False)
+def translate_text(text: str, dest_lang: str) -> str:
+    if dest_lang == "en" or not TRANSLATE_AVAILABLE:
+        return text
+    try:
+        translator = Translator()
+        result = translator.translate(text, dest=dest_lang)
+        return result.text
+    except Exception:
+        return text
+
+def tts_audio(text: str, lang_code: str) -> bytes | None:
+    if not GTTS_AVAILABLE:
+        return None
+    try:
+        tts = gTTS(text=text[:500], lang=lang_code, slow=False)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
+# ─────────────────────────────────────────────────────────────────────────────
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -743,6 +788,23 @@ def render_sidebar():
             if st.button(f"{emoji}  {subject}", key=f"nav_{subject}"):
                 _open_subject(subject)
         st.divider()
+        st.markdown("<p style='font-size:0.7rem;letter-spacing:1px;opacity:0.65;margin-bottom:4px'>LANGUAGE / ULIMI / PUO</p>",
+                    unsafe_allow_html=True)
+        selected_lang = st.selectbox(
+            "🌐 Language",
+            options=list(LANGUAGES.keys()),
+            index=list(LANGUAGES.keys()).index(st.session_state.get("ui_language", "English")),
+            label_visibility="collapsed",
+            key="lang_selector",
+        )
+        st.session_state["ui_language"] = selected_lang
+        st.session_state["ui_lang_cfg"] = LANGUAGES[selected_lang]
+        st.session_state["voice_enabled"] = st.toggle(
+            "🔊 Read aloud",
+            value=st.session_state.get("voice_enabled", False),
+            key="voice_toggle",
+        )
+        st.divider()
         if st.button("🚪  Logout"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
@@ -829,36 +891,129 @@ def page_dashboard():
                 _open_subject(subject)
 
 
+def _render_text_with_voice(text: str, key: str):
+    """Display text and optionally play TTS audio based on sidebar settings."""
+    st.markdown(text)
+    if st.session_state.get("voice_enabled") and GTTS_AVAILABLE:
+        lang_cfg  = st.session_state.get("ui_lang_cfg", LANGUAGES["English"])
+        audio     = tts_audio(text[:500], lang_cfg["gtts_lang"])
+        if audio:
+            st.audio(audio, format="audio/mp3")
+
+
 def page_study_guides():
     inject_css()
     render_sidebar()
-    st.markdown("""
+
+    # ── Resolve current language ──────────────────────────────────────────────
+    lang_cfg   = st.session_state.get("ui_lang_cfg", LANGUAGES["English"])
+    lang_label = st.session_state.get("ui_language", "English")
+    lang_code  = lang_cfg["trans_dest"]
+
+    PAGE_TITLES = {
+        "English": "📂 Study Guides",
+        "isiZulu": "📂 Izihlokweni Zokufunda",
+        "Sesotho": "📂 Ditemane tsa Thuto",
+    }
+    PAGE_SUBS = {
+        "English": "All study guides available. Answers in Ask a Question come directly from these PDFs.",
+        "isiZulu": "Zonke izihlokweni zokufunda ziyatholakala. Izimpendulo ku-Ask a Question zivela kulawa maPDF.",
+        "Sesotho": "Ditemane tsohle tsa thuto di a fumaneha. Dikarabo ho Botsa Potso di tsoa ho dii PDF tsena.",
+    }
+
+    st.markdown(f"""
         <h2 style='font-family:Nunito;font-weight:800;color:#1a3a5c;margin-bottom:0.2rem'>
-            📂 Study Guides
+            {PAGE_TITLES.get(lang_label, PAGE_TITLES["English"])}
         </h2>
         <p style='color:#6b7280;font-size:0.85rem;margin-bottom:1.2rem'>
-            All study guides available. Answers in Ask a Question come directly from these PDFs.
+            {PAGE_SUBS.get(lang_label, PAGE_SUBS["English"])}
         </p>
     """, unsafe_allow_html=True)
-    guides = get_available_study_guides()
-    if not guides:
-        st.info("No study guides found. Add PDF files to the study_guides/ folder.")
-        return
-    st.markdown(f"<p style='color:#1e5799;font-weight:700;font-size:0.88rem'>✅ {len(guides)} study guide(s) loaded and ready:</p>",
-                unsafe_allow_html=True)
-    border_colors = ["#3b82f6","#10b981","#8b5cf6","#f59e0b","#06b6d4","#22c55e","#a78bfa","#ec4899"]
-    for idx, (name, path) in enumerate(guides.items()):
-        color = border_colors[idx % len(border_colors)]
-        try:
-            filesize = f"{round(os.path.getsize(path) / 1_048_576, 1)} MB"
-        except Exception:
-            filesize = ""
-        st.markdown(f"""
-            <div class="guide-card" style="border-left-color:{color}">
-                <h4>📄 {name}</h4>
-                <p>📁 {path} &nbsp;·&nbsp; 💾 {filesize}</p>
-            </div>
-        """, unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📁 My Study Guides", "📤 Upload & Listen"])
+
+    # ── TAB 1: existing PDFs from study_guides/ folder ────────────────────────
+    with tab1:
+        guides = get_available_study_guides()
+        if not guides:
+            st.info("No study guides found. Add PDF files to the study_guides/ folder, or use the Upload & Listen tab above.")
+            return
+        st.markdown(f"<p style='color:#1e5799;font-weight:700;font-size:0.88rem'>✅ {len(guides)} study guide(s) loaded and ready:</p>",
+                    unsafe_allow_html=True)
+        border_colors = ["#3b82f6","#10b981","#8b5cf6","#f59e0b","#06b6d4","#22c55e","#a78bfa","#ec4899"]
+        for idx, (name, path) in enumerate(guides.items()):
+            color = border_colors[idx % len(border_colors)]
+            try:
+                filesize = f"{round(os.path.getsize(path) / 1_048_576, 1)} MB"
+            except Exception:
+                filesize = ""
+            st.markdown(f"""
+                <div class="guide-card" style="border-left-color:{color}">
+                    <h4>📄 {name}</h4>
+                    <p>📁 {path} &nbsp;·&nbsp; 💾 {filesize}</p>
+                </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"📖 Read & Listen · {name}"):
+                try:
+                    import PyPDF2
+                    with open(path, "rb") as f:
+                        reader = PyPDF2.PdfReader(f)
+                        pages  = [p.extract_text() or "" for p in reader.pages]
+                    total_pages = len(pages)
+                    page_num = st.slider(
+                        "Select page",
+                        min_value=1, max_value=total_pages, value=1,
+                        key=f"slider_{idx}",
+                    )
+                    raw_text = pages[page_num - 1].strip()
+                    if not raw_text:
+                        st.warning("This page has no readable text (may be an image-based PDF).")
+                    else:
+                        if lang_code != "en":
+                            with st.spinner(f"Translating to {lang_label}…"):
+                                display_text = translate_text(raw_text[:1500], lang_code)
+                        else:
+                            display_text = raw_text
+                        _render_text_with_voice(display_text, key=f"tts_{idx}_{page_num}")
+                except ImportError:
+                    st.warning("Install PyPDF2 to enable read & listen: `pip install PyPDF2`")
+                except Exception as e:
+                    st.error(f"Could not read PDF: {e}")
+
+    # ── TAB 2: Upload any PDF and listen ──────────────────────────────────────
+    with tab2:
+        UPLOAD_LABELS = {
+            "English": "Upload any study guide or past exam paper (PDF)",
+            "isiZulu": "Layisha noma iyiphi i-PDF yezifundo noma amaphepha okuphasa adlule",
+            "Sesotho": "Kenya PDF efe kapa efe ya ditemane tsa thuto kapa dipampiri tsa tlhahlobo",
+        }
+        st.markdown(f"<p style='color:#6b7280;font-size:0.85rem'>{UPLOAD_LABELS.get(lang_label, UPLOAD_LABELS['English'])}</p>",
+                    unsafe_allow_html=True)
+        uploaded = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed")
+        if uploaded:
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(uploaded)
+                pages  = [p.extract_text() or "" for p in reader.pages]
+                total  = len(pages)
+                st.success(f"✅ Loaded **{uploaded.name}** — {total} page(s)")
+                page_num = st.slider("Select page · Khetha ikhasi · Kgetha leqephe",
+                                     min_value=1, max_value=total, value=1, key="upload_slider")
+                raw_text = pages[page_num - 1].strip()
+                if not raw_text:
+                    st.warning("This page has no readable text.")
+                else:
+                    if lang_code != "en":
+                        with st.spinner(f"Translating to {lang_label}…"):
+                            display_text = translate_text(raw_text[:1500], lang_code)
+                    else:
+                        display_text = raw_text
+                    st.markdown("#### 📖 Content")
+                    _render_text_with_voice(display_text, key="upload_tts")
+            except ImportError:
+                st.error("PyPDF2 not installed. Add `PyPDF2` to requirements.txt and redeploy.")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
 
 
 def page_subject():
@@ -1041,7 +1196,7 @@ def page_quiz():
             <div class='coin-total'>
                 <div style='font-size:2rem'>🪙</div>
                 <div class='amount'>+{coins_earned} coins earned!</div>
-                <div class='subtitle'>Total wallet: {total_coins} coins</div>
+                <div class='subtitle'>Total wallet: {total_coins} coins</div> 
             </div>
         """, unsafe_allow_html=True)
         st.markdown("<h4 style='font-family:Nunito;color:#1a3a5c'>💡 How to improve:</h4>", unsafe_allow_html=True)
