@@ -1,11 +1,12 @@
-streamlit
+streamlit>=1.30.0
 langchain
 langchain-community
 langchain-openai
 langchain-huggingface
-langchain-core
 langchain-text-splitters
-chromadb
-pypdf
 sentence-transformers
-pandas
+chromadb
+openai
+PyPDF2>=3.0.1
+gtts>=2.3.2
+googletrans==4.0.0rc1
