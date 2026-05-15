@@ -1043,24 +1043,26 @@ def page_subject():
     """, unsafe_allow_html=True)
 
     # ── Inline language selector for this subject page ──────────────────────
-    col_title, col_lang = st.columns([3, 1])
-    with col_lang:
-        sel = st.selectbox(
-            "🌐 Language",
-            options=list(LANGUAGES.keys()),
-            index=list(LANGUAGES.keys()).index(st.session_state.get("ui_language", "English")),
-            key=f"lang_{subject}",
-            label_visibility="collapsed",
-        )
-        st.session_state["ui_language"] = sel
-        st.session_state["ui_lang_cfg"] = LANGUAGES[sel]
-        st.session_state["voice_enabled"] = st.checkbox(
-            "🔊 Read aloud",
-            value=st.session_state.get("voice_enabled", False),
-            key=f"voice_{subject}",
-        )
+    with st.container():
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c2:
+            sel = st.selectbox(
+                "🌐 Language",
+                options=list(LANGUAGES.keys()),
+                index=list(LANGUAGES.keys()).index(st.session_state.get("ui_language", "English")),
+                key=f"lang_{subject}",
+            )
+            st.session_state["ui_language"] = sel
+            st.session_state["ui_lang_cfg"] = LANGUAGES[sel]
+        with c3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.session_state["voice_enabled"] = st.checkbox(
+                "🔊 Read aloud",
+                value=st.session_state.get("voice_enabled", False),
+                key=f"voice_{subject}",
+            )
 
-        tab_units, tab_pdf, tab_chat, tab_quiz = st.tabs(["🎬 Animated Study Units", "📄 Study Guide & Listen", "❓ Ask a Question", "📝 Quiz"])
+    tab_units, tab_pdf, tab_chat, tab_quiz = st.tabs(["🎬 Animated Study Units", "📄 Study Guide & Listen", "❓ Ask a Question", "📝 Quiz"])
 
     with tab_units:
         st.markdown("<p style='color:#6b7280;font-size:0.85rem;margin-bottom:1rem'>Watch each lesson then take the quiz.</p>",
