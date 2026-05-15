@@ -484,6 +484,16 @@ def get_available_study_guides() -> dict:
         for pdf in sorted(guides_dir.glob("*.pdf"))
     }
 
+def get_available_previous_papers() -> dict:
+    """Scan the previous_papers/ folder and return {display_name: filepath}."""
+    papers_dir = Path("previous_papers")
+    papers_dir.mkdir(exist_ok=True)
+    return {
+        pdf.stem.replace("_", " ").replace("-", " "): str(pdf)
+        for pdf in sorted(papers_dir.glob("*.pdf"))
+    }
+
+
 def find_guide_for_subject(subject: str) -> str | None:
     keywords = SUBJECT_PDF_MAP.get(subject, [subject.lower()])
     guides   = get_available_study_guides()
@@ -976,7 +986,7 @@ def page_study_guides():
                             display_text = raw_text
                         _render_text_with_voice(display_text, key=f"tts_{idx}_{page_num}")
                 except ImportError:
-                    st.warning("Install PyPDF2 to enable read & listen: `pip install PyPDF2`")
+                    st.warning("PyPDF2 is loading... Please refresh the page in a moment.")
                 except Exception as e:
                     st.error(f"Could not read PDF: {e}")
 
@@ -1032,7 +1042,25 @@ def page_subject():
         <p style='color:#9ca3af;font-size:0.85rem;margin-bottom:1rem'>Grade 12 · {len(data["units"])} Study Units</p>
     """, unsafe_allow_html=True)
 
-    tab_units, tab_chat, tab_quiz = st.tabs(["🎬 Animated Study Units", "❓ Ask a Question", "📝 Quiz"])
+    # ── Inline language selector for this subject page ──────────────────────
+    col_title, col_lang = st.columns([3, 1])
+    with col_lang:
+        sel = st.selectbox(
+            "🌐 Language",
+            options=list(LANGUAGES.keys()),
+            index=list(LANGUAGES.keys()).index(st.session_state.get("ui_language", "English")),
+            key=f"lang_{subject}",
+            label_visibility="collapsed",
+        )
+        st.session_state["ui_language"] = sel
+        st.session_state["ui_lang_cfg"] = LANGUAGES[sel]
+        st.session_state["voice_enabled"] = st.checkbox(
+            "🔊 Read aloud",
+            value=st.session_state.get("voice_enabled", False),
+            key=f"voice_{subject}",
+        )
+
+        tab_units, tab_pdf, tab_chat, tab_quiz = st.tabs(["🎬 Animated Study Units", "📄 Study Guide & Listen", "❓ Ask a Question", "📝 Quiz"])
 
     with tab_units:
         st.markdown("<p style='color:#6b7280;font-size:0.85rem;margin-bottom:1rem'>Watch each lesson then take the quiz.</p>",
@@ -1051,6 +1079,43 @@ def page_subject():
                     st.session_state.quiz_saved   = False
                     st.session_state.page         = "quiz"
                     st.rerun()
+
+
+    with tab_pdf:
+        lang_cfg   = st.session_state.get("ui_lang_cfg", LANGUAGES["English"])
+        lang_label = st.session_state.get("ui_language", "English")
+        lang_code  = lang_cfg["trans_dest"]
+        pdf_path   = find_guide_for_subject(subject)
+        if not pdf_path:
+            st.info(f"No study guide PDF found for {subject}. Add a PDF to the study_guides/ folder.")
+        else:
+            st.markdown(f"<p style='color:#1e5799;font-weight:700;font-size:0.88rem'>📄 {subject} Study Guide</p>", unsafe_allow_html=True)
+            try:
+                import PyPDF2
+                with open(pdf_path, "rb") as f:
+                    reader     = PyPDF2.PdfReader(f)
+                    pages      = [p.extract_text() or "" for p in reader.pages]
+                total_pages = len(pages)
+                page_num = st.slider(
+                    "Select page · Khetha ikhasi · Kgetha leqephe",
+                    min_value=1, max_value=total_pages, value=1,
+                    key=f"subj_pdf_slider_{subject}",
+                )
+                raw_text = pages[page_num - 1].strip()
+                if not raw_text:
+                    st.warning("This page has no readable text (may be image-based).")
+                else:
+                    if lang_code != "en":
+                        with st.spinner(f"Translating to {lang_label}…"):
+                            display_text = translate_text(raw_text[:1500], lang_code)
+                    else:
+                        display_text = raw_text
+                    st.markdown("#### 📖 Content")
+                    _render_text_with_voice(display_text, key=f"subj_tts_{subject}_{page_num}")
+            except ImportError:
+                st.warning("PDF reader is loading. Please refresh in a moment.")
+            except Exception as e:
+                st.error(f"Could not read PDF: {e}")
 
     with tab_chat:
         if not st.session_state.db_ready:
@@ -1302,12 +1367,33 @@ def page_previous_papers():
     inject_css()
     render_sidebar()
 
-    st.markdown("""
+    # ── Language config ───────────────────────────────────────────────────────
+    lang_cfg   = st.session_state.get("ui_lang_cfg", LANGUAGES["English"])
+    lang_label = st.session_state.get("ui_language", "English")
+    lang_code  = lang_cfg["trans_dest"]
+
+    PAGE_TITLES = {
+        "English": "📝 Previous Papers",
+        "isiZulu": "📝 Amaphepha Adlule",
+        "Sesotho": "📝 Dipampiri tsa Mehleng e Fetileng",
+    }
+    PAGE_SUBS = {
+        "English": "Download and practise with official past exam papers to prepare for your Grade 12 finals.",
+        "isiZulu": "Layisha futhi ulalele amaphepha okuphasa asemthethweni ukuze ulungiselele izihlolwa zakho zika-Grade 12.",
+        "Sesotho": "Kenya le ho itlwaetsa ka dipampiri tsa tlhahlobo tsa molao ho itokisetsa tlhahlobo ya hao ya Kereiti 12.",
+    }
+    UPLOAD_HINT = {
+        "English": "💡 Download a paper from DBE above → then upload it here to read and listen in your language.",
+        "isiZulu": "💡 Layisha iphepha eliphezulu le-DBE → bese ulilayisha lapha ukuze ulifunde futhi ulilalele ngolimi lwakho.",
+        "Sesotho": "💡 Kenya pampiri ho tswa ho DBE ka holimo → ebe o e kenya mona ho e bala le ho e utloa ka puo ya hao.",
+    }
+
+    st.markdown(f"""
         <h2 style='font-family:Nunito;font-weight:800;color:#1a3a5c;margin-bottom:0.2rem'>
-            📝 Previous Question Papers
+            {PAGE_TITLES.get(lang_label, PAGE_TITLES["English"])}
         </h2>
         <p style='color:#6b7280;font-size:0.85rem;margin-bottom:1.5rem'>
-            Download and practise with official past exam papers to prepare for your Grade 12 finals.
+            {PAGE_SUBS.get(lang_label, PAGE_SUBS["English"])}
         </p>
     """, unsafe_allow_html=True)
 
@@ -1379,68 +1465,179 @@ def page_previous_papers():
         },
     }
 
-    user_subjects = st.session_state.get("user_subjects", [])
+    user_subjects    = st.session_state.get("user_subjects", [])
     subjects_to_show = user_subjects if user_subjects else list(PAPERS.keys())
 
-    st.markdown("""
-        <div style='background:linear-gradient(135deg,#eff6ff,#dbeafe);
-            border:1px solid #93c5fd;border-radius:12px;
-            padding:0.9rem 1.2rem;font-size:0.83rem;color:#1e3a5f;margin-bottom:1.5rem'>
-            🏛️ <strong>All papers are sourced from the official Department of Basic Education website.</strong><br>
-            Clicking a paper will open the DBE past papers page where you can download the PDF.
-        </div>
-    """, unsafe_allow_html=True)
+    tab_preloaded, tab_download, tab_listen = st.tabs(["📂 Previous Papers", "⬇️ Download from DBE", "🔊 Upload & Listen"])
 
-    for subject in subjects_to_show:
-        info = PAPERS.get(subject)
-        if not info:
-            continue
-        emoji  = info["emoji"]
-        color  = info["color"]
-        papers = info["papers"]
 
+    # ── TAB 0: Preloaded previous papers from previous_papers/ folder ────────
+    with tab_preloaded:
+        preloaded = get_available_previous_papers()
+        lang_cfg   = st.session_state.get("ui_lang_cfg", LANGUAGES["English"])
+        lang_label = st.session_state.get("ui_language", "English")
+        lang_code  = lang_cfg["trans_dest"]
+
+        PRELOADED_LABELS = {
+            "English": "Select a past exam paper below to read and listen in your language.",
+            "isiZulu": "Khetha iphepha lokuhlolwa elidlule ngezansi ukufunda nokulalela ngolimi lwakho.",
+            "Sesotho": "Kgetha pampiri ea tlhahlobo ea mehleng e fetileng ka tlase ho bala le ho utloa ka puo ya hao.",
+        }
+        if not preloaded:
+            st.info("No previous papers found in the previous_papers/ folder. Add PDF files to that folder and push to GitHub.")
+        else:
+            st.markdown(f"<p style='color:#6b7280;font-size:0.85rem;margin-bottom:1rem'>{PRELOADED_LABELS.get(lang_label, PRELOADED_LABELS['English'])}</p>", unsafe_allow_html=True)
+            st.success(f"✅ {len(preloaded)} past paper(s) loaded and ready.")
+
+            selected_paper = st.selectbox(
+                "Choose a paper · Khetha iphepha · Kgetha pampiri",
+                options=list(preloaded.keys()),
+                key="prev_paper_select",
+            )
+            if selected_paper:
+                path = preloaded[selected_paper]
+                try:
+                    import PyPDF2
+                    with open(path, "rb") as f:
+                        reader     = PyPDF2.PdfReader(f)
+                        pages      = [p.extract_text() or "" for p in reader.pages]
+                    total_pages = len(pages)
+                    st.markdown(f"<p style='color:#1e5799;font-weight:700;font-size:0.85rem'>📄 {selected_paper} — {total_pages} page(s)</p>", unsafe_allow_html=True)
+                    page_num = st.slider(
+                        "Select page · Khetha ikhasi · Kgetha leqephe",
+                        min_value=1, max_value=total_pages, value=1,
+                        key="prev_preloaded_slider",
+                    )
+                    raw_text = pages[page_num - 1].strip()
+                    if not raw_text:
+                        st.warning("This page has no readable text (may be a scanned image page).")
+                    else:
+                        if lang_code != "en":
+                            with st.spinner(f"Translating to {lang_label}…"):
+                                display_text = translate_text(raw_text[:1500], lang_code)
+                        else:
+                            display_text = raw_text
+                        st.markdown("#### 📖 Content")
+                        _render_text_with_voice(display_text, key="prev_preloaded_tts")
+                except ImportError:
+                    st.error("PyPDF2 not installed. Add `PyPDF2` to requirements.txt and redeploy.")
+                except Exception as e:
+                    st.error(f"Could not read PDF: {e}")
+
+    # ── TAB 1: Download links (existing behaviour, now with translated header) ─
+    with tab_download:
+        DBE_LABELS = {
+            "English": "All papers are sourced from the official Department of Basic Education website. Clicking a paper will open the DBE page where you can download the PDF.",
+            "isiZulu": "Wonke amaphepha avela kuwebhusayithi esemthethweni yoMnyango WezeMfundo Eyisisekelo. Ukuchofoza iphepha kuzovula ikhasi le-DBE lapho ungalanda khona i-PDF.",
+            "Sesotho": "Dipampiri tsohle di tsoa webosaeteng ea semmuso ea Lefapha la Thuto ea Motheo. Ho hatsa pampiri ho tla bula leqephe la DBE moo o ka kenyang PDF teng.",
+        }
         st.markdown(f"""
-            <div style='background:white;border-radius:14px;padding:1.2rem 1.4rem;
-                border-left:5px solid {color};
-                box-shadow:0 2px 10px rgba(30,87,153,0.07);margin-bottom:1rem'>
-                <h4 style='font-family:Nunito;font-weight:700;color:#1a3a5c;margin:0 0 0.8rem'>
-                    {emoji} {subject}
-                </h4>
+            <div style='background:linear-gradient(135deg,#eff6ff,#dbeafe);
+                border:1px solid #93c5fd;border-radius:12px;
+                padding:0.9rem 1.2rem;font-size:0.83rem;color:#1e3a5f;margin-bottom:1.5rem'>
+                🏛️ {DBE_LABELS.get(lang_label, DBE_LABELS["English"])}
             </div>
         """, unsafe_allow_html=True)
 
-        cols = st.columns(len(papers) if len(papers) <= 3 else 3)
-        for i, paper in enumerate(papers):
-            with cols[i % 3]:
-                st.markdown(f"""
-                    <a href="{paper['url']}" target="_blank" style="text-decoration:none">
-                        <div style='background:#f8faff;border:1.5px solid {color};
-                            border-radius:10px;padding:0.7rem 0.9rem;
-                            text-align:center;transition:all 0.2s;cursor:pointer;
-                            margin-bottom:0.5rem'>
-                            <div style='font-size:1.3rem'>📄</div>
-                            <div style='font-size:0.75rem;font-weight:700;
-                                color:#1a3a5c;margin-top:0.2rem'>
-                                {paper['label']}
-                            </div>
-                            <div style='font-size:0.7rem;color:{color};
-                                font-weight:600;margin-top:0.2rem'>
-                                ⬇️ Download
-                            </div>
-                        </div>
-                    </a>
-                """, unsafe_allow_html=True)
+        DOWNLOAD_LABEL = {"English": "⬇️ Download", "isiZulu": "⬇️ Layisha", "Sesotho": "⬇️ Kenya"}
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-        <div style='background:linear-gradient(135deg,#fef3c7,#fde68a);
-            border:2px solid #f59e0b;border-radius:12px;
-            padding:1rem 1.2rem;font-size:0.83rem;color:#92400e'>
-            💡 <strong>Study Tip:</strong> Always practise past papers under timed conditions.
-            Start with the most recent year and work backwards.
-            Check your answers against the memorandum also available on the DBE website.
-        </div>
-    """, unsafe_allow_html=True)
+        for subject in subjects_to_show:
+            info = PAPERS.get(subject)
+            if not info:
+                continue
+            emoji  = info["emoji"]
+            color  = info["color"]
+            papers = info["papers"]
+            st.markdown(f"""
+                <div style='background:white;border-radius:14px;padding:1.2rem 1.4rem;
+                    border-left:5px solid {color};
+                    box-shadow:0 2px 10px rgba(30,87,153,0.07);margin-bottom:1rem'>
+                    <h4 style='font-family:Nunito;font-weight:700;color:#1a3a5c;margin:0 0 0.8rem'>
+                        {emoji} {subject}
+                    </h4>
+                </div>
+            """, unsafe_allow_html=True)
+            cols = st.columns(len(papers) if len(papers) <= 3 else 3)
+            for i, paper in enumerate(papers):
+                with cols[i % 3]:
+                    st.markdown(f"""
+                        <a href="{paper['url']}" target="_blank" style="text-decoration:none">
+                            <div style='background:#f8faff;border:1.5px solid {color};
+                                border-radius:10px;padding:0.7rem 0.9rem;
+                                text-align:center;cursor:pointer;margin-bottom:0.5rem'>
+                                <div style='font-size:1.3rem'>📄</div>
+                                <div style='font-size:0.75rem;font-weight:700;color:#1a3a5c;margin-top:0.2rem'>
+                                    {paper['label']}
+                                </div>
+                                <div style='font-size:0.7rem;color:{color};font-weight:600;margin-top:0.2rem'>
+                                    {DOWNLOAD_LABEL.get(lang_label, "⬇️ Download")}
+                                </div>
+                            </div>
+                        </a>
+                    """, unsafe_allow_html=True)
+
+        STUDY_TIP = {
+            "English": "Always practise past papers under timed conditions. Start with the most recent year and work backwards. Check your answers against the memorandum also available on the DBE website.",
+            "isiZulu": "Hlala ulalele amaphepha adlule ngaphansi kwezimo zesikhathi. Qala ngonyaka wakamuva bese ubuyela emuva. Hlola izimpendulo zakho ngememorandum etholakala kuwebhusayithi ye-DBE.",
+            "Sesotho": "Leka dipampiri tsa mehleng e fetileng ka maemo a nako. Qala ka selemo sa morao-rao ebe o khutlela morao. Hlahloba dikarabo tsa hao ka memoranda e fumanehang le yona webosaeteng ea DBE.",
+        }
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"""
+            <div style='background:linear-gradient(135deg,#fef3c7,#fde68a);
+                border:2px solid #f59e0b;border-radius:12px;
+                padding:1rem 1.2rem;font-size:0.83rem;color:#92400e'>
+                💡 <strong>{"Iseluleko Sokufunda" if lang_label == "isiZulu" else "Tlhahiso ea Thuto" if lang_label == "Sesotho" else "Study Tip"}:</strong>
+                {STUDY_TIP.get(lang_label, STUDY_TIP["English"])}
+            </div>
+        """, unsafe_allow_html=True)
+
+    # ── TAB 2: Upload downloaded paper → read & listen in chosen language ──────
+    with tab_listen:
+        st.markdown(f"""
+            <div style='background:linear-gradient(135deg,#f0fdf4,#dcfce7);
+                border:1px solid #86efac;border-radius:12px;
+                padding:0.9rem 1.2rem;font-size:0.83rem;color:#15803d;margin-bottom:1rem'>
+                {UPLOAD_HINT.get(lang_label, UPLOAD_HINT["English"])}
+            </div>
+        """, unsafe_allow_html=True)
+
+        uploaded = st.file_uploader(
+            "Upload a past exam paper PDF · Layisha i-PDF · Kenya PDF",
+            type=["pdf"],
+            key="prev_paper_upload",
+            label_visibility="visible",
+        )
+        if uploaded:
+            try:
+                import PyPDF2
+                reader     = PyPDF2.PdfReader(uploaded)
+                pages      = [p.extract_text() or "" for p in reader.pages]
+                total_pages = len(pages)
+                st.success(f"✅ Loaded **{uploaded.name}** — {total_pages} page(s)")
+
+                page_num = st.slider(
+                    "Select page · Khetha ikhasi · Kgetha leqephe",
+                    min_value=1, max_value=total_pages, value=1,
+                    key="prev_paper_slider",
+                )
+                raw_text = pages[page_num - 1].strip()
+
+                if not raw_text:
+                    st.warning("This page has no readable text (may be a scanned image page).")
+                else:
+                    if lang_code != "en":
+                        with st.spinner(f"Translating to {lang_label}…"):
+                            display_text = translate_text(raw_text[:1500], lang_code)
+                    else:
+                        display_text = raw_text
+
+                    st.markdown("#### 📖 Content")
+                    _render_text_with_voice(display_text, key="prev_paper_tts")
+
+            except ImportError:
+                st.error("PyPDF2 not installed. Add `PyPDF2` to requirements.txt and redeploy.")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
 
 
 # ==================== ROUTER ====================
